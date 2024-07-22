@@ -293,6 +293,17 @@ public class NatsServerPool implements ServerPool {
         }
     }
 
+
+    @Override
+    public void shuffle() {
+        listLock.lock();
+        try {
+            Collections.shuffle(entryList, ThreadLocalRandom.current());
+        } finally {
+            listLock.unlock();
+        }
+    }
+
     @Override
     public boolean hasSecureServer() {
         return hasSecureServer;

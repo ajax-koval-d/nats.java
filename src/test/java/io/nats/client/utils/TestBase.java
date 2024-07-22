@@ -95,6 +95,23 @@ public class TestBase {
         void test(Connection nc1, Connection nc2) throws Exception;
     }
 
+    public interface TwoServerRebalanceTest {
+        void test(List<Connection> nc, NatsTestServer srv1, NatsTestServer srv2, String[] serverInserts1, String[] serverInserts2) throws Exception;
+    }
+
+    public interface TwoServerTestOptions {
+        default void append(int index, Options.Builder builder) {
+        }
+
+        default boolean configureAccount() {
+            return false;
+        }
+
+        default boolean includeAllServers() {
+            return false;
+        }
+    }
+
     public interface ThreeServerTest {
         void test(Connection nc1, Connection nc2, Connection nc3) throws Exception;
     }
@@ -376,6 +393,56 @@ public class TestBase {
         }
     }
 
+    public static void runInJsCluster(TwoServerTestOptions tstOpts, TwoServerRebalanceTest twoServerTest) throws Exception {
+        int port1 = NatsTestServer.nextPort();
+        int port2 = NatsTestServer.nextPort();
+        int listen1 = NatsTestServer.nextPort();
+        int listen2 = NatsTestServer.nextPort();
+        String dir1 = tempJsStoreDir();
+        String dir2 = tempJsStoreDir();
+        String cluster = "cluster_" + variant();
+        String serverPrefix = "server_" + variant() + "_";
+
+        if (tstOpts == null) {
+            tstOpts = new TwoServerTestOptions() {};
+        }
+        boolean configureAccount = tstOpts.configureAccount();
+
+        String[] server1Inserts = makeInsert(cluster, serverPrefix + 1, dir1, listen1, listen2, configureAccount);
+        String[] server2Inserts = makeInsert(cluster, serverPrefix + 2, dir2, listen2, listen1, configureAccount);
+
+        try (NatsTestServer srv1 = new NatsTestServer(port1, false, true, null, server1Inserts, null);
+             NatsTestServer srv2 = new NatsTestServer(port2, false, true, null, server2Inserts, null);
+             Connection nc1 = standardConnection(makeOptions(0, tstOpts, srv1, srv2));
+             Connection nc2 = standardConnection(makeOptions(1, tstOpts, srv2, srv1));
+             Connection nc3 = standardConnection(makeOptions(0, tstOpts, srv1, srv2));
+             Connection nc4 = standardConnection(makeOptions(1, tstOpts, srv2, srv1));
+             Connection nc5 = standardConnection(makeOptions(0, tstOpts, srv1, srv2));
+             Connection nc6 = standardConnection(makeOptions(1, tstOpts, srv2, srv1));
+             Connection nc7 = standardConnection(makeOptions(0, tstOpts, srv1, srv2));
+             Connection nc8 = standardConnection(makeOptions(1, tstOpts, srv2, srv1));
+             Connection nc9 = standardConnection(makeOptions(0, tstOpts, srv1, srv2));
+             Connection nc10 = standardConnection(makeOptions(1, tstOpts, srv2, srv1));
+             Connection nc11 = standardConnection(makeOptions(0, tstOpts, srv1, srv2));
+        ) {
+            try {
+                twoServerTest.test(List.of(nc1, nc2, nc3, nc4, nc5, nc6, nc7, nc8, nc9, nc10, nc11), srv1, srv2, server1Inserts, server2Inserts);
+            } finally {
+                cleanupJs(nc1);
+                cleanupJs(nc2);
+                cleanupJs(nc3);
+                cleanupJs(nc4);
+                cleanupJs(nc5);
+                cleanupJs(nc6);
+                cleanupJs(nc7);
+                cleanupJs(nc8);
+                cleanupJs(nc9);
+                cleanupJs(nc10);
+                cleanupJs(nc11);
+            }
+        }
+    }
+
     private static String[] makeInsert(String clusterName, String serverName, String jsStoreDir, int listen, int route1, int route2, boolean configureAccount) {
         String[] serverInserts = new String[configureAccount ? 19 : 12];
         int x = -1;
@@ -389,6 +456,32 @@ public class TestBase {
         serverInserts[++x] = "  routes: [";
         serverInserts[++x] = "    nats-route://127.0.0.1:" + route1;
         serverInserts[++x] = "    nats-route://127.0.0.1:" + route2;
+        serverInserts[++x] = "  ]";
+        serverInserts[++x] = "}";
+        if (configureAccount) {
+            serverInserts[++x] = "accounts {";
+            serverInserts[++x] = "  $SYS: {}";
+            serverInserts[++x] = "  NVCF: {";
+            serverInserts[++x] = "    jetstream: \"enabled\",";
+            serverInserts[++x] = "    users: [ { nkey: " + USER_NKEY + " } ]";
+            serverInserts[++x] = "  }";
+            serverInserts[++x] = "}";
+        }
+        return serverInserts;
+    }
+
+    public static String[] makeInsert(String clusterName, String serverName, String jsStoreDir, int listen, int route1, boolean configureAccount) {
+        String[] serverInserts = new String[configureAccount ? 18 : 11];
+        int x = -1;
+        serverInserts[++x] = "jetstream {";
+        serverInserts[++x] = "    store_dir=" + jsStoreDir;
+        serverInserts[++x] = "}";
+        serverInserts[++x] = "server_name=" + serverName;
+        serverInserts[++x] = "cluster {";
+        serverInserts[++x] = "  name: " + clusterName;
+        serverInserts[++x] = "  listen: 127.0.0.1:" + listen;
+        serverInserts[++x] = "  routes: [";
+        serverInserts[++x] = "    nats-route://127.0.0.1:" + route1;
         serverInserts[++x] = "  ]";
         serverInserts[++x] = "}";
         if (configureAccount) {
@@ -417,6 +510,25 @@ public class TestBase {
             b.servers(servers);
         }
         else {
+            b.server(srvs[0].getURI());
+        }
+        if (tstOpts.configureAccount()) {
+            b.authHandler(Nats.staticCredentials(null, USER_SEED.toCharArray()));
+        }
+        tstOpts.append(id, b);
+        return b.build();
+    }
+
+    private static Options makeOptions(int id, TwoServerTestOptions tstOpts, NatsTestServer... srvs) {
+        Options.Builder b = Options.builder();
+        if (tstOpts.includeAllServers()) {
+            String[] servers = new String[srvs.length];
+            for (int i = 0; i < srvs.length; i++) {
+                NatsTestServer nts = srvs[i];
+                servers[i] = nts.getURI();
+            }
+            b.servers(servers);
+        } else {
             b.server(srvs[0].getURI());
         }
         if (tstOpts.configureAccount()) {

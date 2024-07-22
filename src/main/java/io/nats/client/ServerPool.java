@@ -78,4 +78,6 @@ public interface ServerPool {
      * @return the flag
      */
     boolean hasSecureServer();
+
+    void shuffle();
 }

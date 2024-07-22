@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
@@ -31,6 +32,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static io.nats.client.NatsTestServer.getNatsLocalhostUri;
 import static io.nats.client.support.NatsConstants.OUTPUT_QUEUE_IS_FULL;
@@ -722,6 +724,15 @@ public class ReconnectTests {
     }
 
     @Test
+    public void testRebalanceWithForceReconnect() throws Exception {
+        ListenerForTesting listener = new ListenerForTesting(false, false);
+        TwoServerTestOptions tstOpts = makeTwoServerTestOptions(listener, false);
+        runInJsCluster(tstOpts, (List<Connection> nc, NatsTestServer srv1, NatsTestServer srv2, String[] inputs1, String[] inputs2) ->
+                testRebalanceWithForceReconnect(nc, srv1, srv2, inputs1, inputs2, listener)
+        );
+    }
+
+    @Test
     public void testForceReconnectWithAccount() throws Exception {
         ListenerForTesting listener = new ListenerForTesting();
         ThreeServerTestOptions tstOpts = makeThreeServerTestOptions(listener, true);
@@ -741,6 +752,73 @@ public class ReconnectTests {
         assertTrue(listener.getConnectionEvents().contains(Events.RECONNECTED));
     }
 
+    private static void testRebalanceWithForceReconnect(List<Connection> nc,
+                                                        NatsTestServer srv1,
+                                                        NatsTestServer srv2,
+                                                        String[] inputs1,
+                                                        String[] inputs2,
+                                                        ListenerForTesting listener
+    ) throws IOException, InterruptedException {
+        System.out.println("BEFORE UPGRADE");
+        System.out.println(getUrls(nc));
+        Servers result = simulateServerUpgrade(srv1, srv2, inputs1, inputs2);
+        Thread.sleep(5000);
+
+        System.out.println("AFTER UPGRADE");
+        System.out.println(getUrls(nc));
+
+        for (Connection connection : nc) {
+                connection.forceReconnect();
+                standardConnectionWait(connection);
+        }
+
+        System.out.println("================================");
+        System.out.println("AFTER REBALANCE");
+        System.out.println(getUrls(nc));
+
+        for (Connection it : nc) {
+            it.close();
+        }
+        result.srv1.shutdown();
+        result.srv2.shutdown();
+    }
+
+    private static Servers simulateServerUpgrade(NatsTestServer srv1,
+                                                 NatsTestServer srv2,
+                                                 String[] inputs1,
+                                                 String[] inputs2
+    ) throws InterruptedException, IOException {
+        // Upgrade first server
+        srv1.shutdown();
+        // Wait for connection to reconnect to server 2
+        Thread.sleep(5000);
+        // Restart 1st server
+        //TODO Kinda dirty, cleanup won't work properly
+        srv1 = new NatsTestServer(srv1.getPort(), false, true, null, inputs1, null);
+        Thread.sleep(1000);
+        // Upgrade second server
+        srv2.shutdown();
+        // Wait for connections to reconnect to server 1
+        Thread.sleep(5000);
+        // Restart 2nd server
+        srv2 = new NatsTestServer(srv2.getPort(), false, true, null, inputs2, null);
+        return new Servers(srv1, srv2);
+    }
+
+    private static class Servers {
+        public final NatsTestServer srv1;
+        public final NatsTestServer srv2;
+
+        public Servers(NatsTestServer srv1, NatsTestServer srv2) {
+            this.srv1 = srv1;
+            this.srv2 = srv2;
+        }
+    }
+
+    private static String getUrls(List<Connection> nc) {
+        return nc.stream().map(Connection::getConnectedUrl).sorted().collect(Collectors.joining("\n"));
+    }
+
     private static ThreeServerTestOptions makeThreeServerTestOptions(ListenerForTesting listener, final boolean configureAccount) {
         return new ThreeServerTestOptions() {
             @Override
@@ -748,6 +826,28 @@ public class ReconnectTests {
                 if (index == 0) {
                     builder.connectionListener(listener).ignoreDiscoveredServers().noRandomize();
                 }
+            }
+
+            @Override
+            public boolean configureAccount() {
+                return configureAccount;
+            }
+
+            @Override
+            public boolean includeAllServers() {
+                return true;
+            }
+        };
+    }
+
+    private static TwoServerTestOptions makeTwoServerTestOptions(ListenerForTesting listener, final boolean configureAccount) {
+        return new TwoServerTestOptions() {
+            @Override
+            public void append(int index, Options.Builder builder) {
+                // Randomize connection;
+                // With discovered servers enabled effect might be not so evident since one server can
+                // have multiple URLs
+                builder.connectionListener(listener).verbose().ignoreDiscoveredServers();
             }
 
             @Override

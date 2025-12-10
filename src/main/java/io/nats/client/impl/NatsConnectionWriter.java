@@ -208,6 +208,7 @@ class NatsConnectionWriter implements Runnable {
                 NatsMessage msg;
                 if (mode.get() == Mode.Normal) {
                     msg = this.normalOutgoing.accumulate(sendBufferLength.get(), Options.MAX_MESSAGES_IN_NETWORK_BUFFER, outgoingTimeout);
+                    System.out.println("Writer queue size after accumulate: " + normalOutgoing.queue.size() + " While length is: " + normalOutgoing.length);
                 }
                 else {
                     msg = this.reconnectOutgoing.accumulate(sendBufferLength.get(), Options.MAX_MESSAGES_IN_NETWORK_BUFFER, reconnectTimeout);
@@ -247,7 +248,9 @@ class NatsConnectionWriter implements Runnable {
     }
 
     boolean queue(NatsMessage msg) {
-        return this.normalOutgoing.push(msg);
+        boolean result = this.normalOutgoing.push(msg);
+        System.out.println("Writer queue size after push: " + normalOutgoing.queue.size() + " While length is: " + normalOutgoing.length);
+        return result;
     }
 
     void queueInternalMessage(NatsMessage msg) {

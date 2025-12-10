@@ -32,6 +32,7 @@ public class NatsStatisticsTests {
                 Connection nc = Nats.connect(new Options.Builder()
                                                 .server(ts.getURI())
                                                 .turnOnAdvancedStats()
+                                                .discardMessagesWhenOutgoingQueueFull()
                                                 .build())) {
             assertSame(Connection.Status.CONNECTED, nc.getStatus(), "Connected Status");
 
@@ -41,7 +42,10 @@ public class NatsStatisticsTests {
             d.subscribe("subject");
 
             nc.flush(Duration.ofMillis(500));
-            Future<Message> incoming = nc.request("subject", new byte[8]);
+            Future<Message> incoming = null;
+            for (int i = 0; i < 1000; i++) {
+                incoming = nc.request("subject", new byte[8]);
+            }
             nc.flush(Duration.ofMillis(500));
             Message msg = incoming.get(500, TimeUnit.MILLISECONDS);
 
@@ -63,7 +67,7 @@ public class NatsStatisticsTests {
 
             try {
                 assertSame(Connection.Status.CONNECTED, nc.getStatus(), "Connected Status");
-                
+
                 Dispatcher d = nc.createDispatcher((msg) -> {
                     Message m = NatsMessage.builder()
                         .subject(msg.getReplyTo())
